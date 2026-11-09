@@ -11,12 +11,6 @@ const diary = [
   { type:'随行日记 / 左', title:'灯下', number:1, lines:['天还没有亮。','桌面上摊着昨夜抄的字，','我把纸角压平，合上笔记。'] },
   { type:'随行日记 / 右', title:'启程', number:2, lines:['门外传来集合的声音。','远处山影还在雾里，','我们沿着那条小路出发。'] }
 ];
-const objects = {
-  paper:['01 / DOCUMENTS','桌上文稿','点击纸张或箭头，翻阅下一页。'],
-  diary:['02 / JOURNAL','随行日记','情境创作 · 案头的一则行军日记'],
-  radio:['04 / SIGNAL','电报机','试发一封电文，等待演示回执。'],
-  map:['05 / ROUTE MAP','长征路线图','1934.10 — 1936.10 · 概念图中的路线示意']
-};
 const $ = id => document.getElementById(id);
 const canvas = $('scene');
 const reduced = matchMedia('(prefers-reduced-motion: reduce)');
@@ -24,12 +18,11 @@ const v = (x, y, z) => new T.Vector3(x, y, z);
 const clamp = x => Math.min(1, Math.max(0, x));
 const ease = x => x * x * (3 - 2 * x);
 const byObject = [...document.querySelectorAll('[data-object]')];
-const pins = [...document.querySelectorAll('.pin')];
 const direction = v(0, 1, 0);
 const overhead = v(0, 0, -1);
 const pointer = new T.Vector2();
+const sway = new T.Vector2();
 const ray = new T.Raycaster();
-const marker = new T.Vector3();
 const terminal = $('terminal');
 const messages = $('messages');
 const input = $('telegram');
@@ -37,6 +30,12 @@ let room;
 let view = 'room';
 let flight;
 let moving = false;
+let overview;
+let seated;
+let overviewProgress = 0;
+let scrollTarget = 0;
+let mouseInside = false;
+let frameTime;
 let lampOn = false;
 let lightAmount = 0;
 let focusAmount = 0;
@@ -46,24 +45,28 @@ let turning;
 let signal;
 let signalPhase = '';
 let hover = null;
-let noticeTimer;
 
 function cameraPose(id) {
   const mobile = canvas.clientWidth <= 760;
   const fit = (width, height) => Math.max(width / room.camera.aspect, height) / (2 * Math.tan(T.MathUtils.degToRad(room.camera.fov / 2)));
   if (id === 'room') {
-    const target = mobile ? v(0, 1.84, .21) : v(-.95, 1.88, .20);
+    const target = v(0, 1.88, .2);
     const distance = fit(mobile ? 4.80 : 5.5, mobile ? 5.95 : 5.62);
     const offset = v(2.28, 1.65, 7.68).normalize().multiplyScalar(distance);
-    return { target, eye:target.clone().add(offset), up:direction, shift:mobile ? -.055 : 0 };
+    return { target, eye:target.clone().add(offset), up:direction, shift:0 };
+  }
+  if (id === 'seated') {
+    const target = v(0, 2.12, .16);
+    return { target, eye:target.clone().add(v(0,.52,fit(4.78,4.30))), up:direction, shift:0 };
   }
   if (id === 'paper') {
     const target = v(-1.27, 1.95, .43);
     return { target, eye:target.clone().add(v(0,fit(1.27,1.15),0)), up:overhead, shift:0 };
   }
   if (id === 'diary') {
-    const target = v(-.44, 2.01, .275);
-    return { target, eye:target.clone().add(v(0,fit(1.63,1.13),0)), up:overhead, shift:0 };
+    const target = room.diary.localToWorld(v(-.31, .10, 0));
+    const up = overhead.clone().applyAxisAngle(direction, room.diary.rotation.y);
+    return { target, eye:target.clone().add(v(0,fit(1.63,1.13),0)), up, shift:0 };
   }
   if (id === 'map') {
     const target = v(.04, 3.12, -.957);
@@ -77,14 +80,23 @@ function orientation(pose) {
   return new T.Quaternion().setFromRotationMatrix(new T.Matrix4().lookAt(pose.eye, pose.target, pose.up));
 }
 
+function overviewPose() {
+  return {
+    target: overview.target.clone().lerp(seated.target, overviewProgress),
+    eye: overview.eye.clone().lerp(seated.eye, overviewProgress),
+    up: direction,
+    shift: 0
+  };
+}
+
 function projection(shift) {
   const { clientWidth:width, clientHeight:height } = canvas;
   room.camera.setViewOffset(width, height, 0, shift * height, width, height);
 }
 
-function flightTo(id, immediate = false) {
+function flightTo(id) {
   const camera = room.camera;
-  const pose = cameraPose(id);
+  const pose = id === 'room' ? overviewPose() : cameraPose(id);
   const start = camera.position.clone();
   const stage = pose.eye.clone().lerp(start,.38);
   if (id === 'paper' || id === 'diary') stage.y = Math.max(pose.eye.y + .26, stage.y);
@@ -92,8 +104,9 @@ function flightTo(id, immediate = false) {
   const curve = new T.CatmullRomCurve3([start, stage, pose.eye], false, 'centripetal');
   const startRotation = camera.quaternion.clone();
   const endRotation = orientation(pose);
-  flight = { curve, startRotation, endRotation, startShift, shift:pose.shift, from:performance.now(), duration:immediate || reduced.matches ? 0 : 980 };
+  flight = { curve, startRotation, endRotation, startShift, shift:pose.shift, from:performance.now(), duration:reduced.matches ? 0 : 980 };
   moving = true;
+  sway.set(0, 0);
 }
 
 function settle() {
@@ -108,40 +121,26 @@ function select(id) {
   if (!room) return;
   if (id === 'lamp') {
     lampOn = !lampOn;
-    byObject.filter(item => item.dataset.object === 'lamp').forEach(item => item.setAttribute('aria-pressed', lampOn));
-    announce(lampOn ? '油灯已点亮' : '油灯已熄灭');
+    byObject.find(item => item.dataset.object === 'lamp').setAttribute('aria-pressed', lampOn);
+    $('reading').textContent = lampOn ? '油灯已点亮' : '油灯已熄灭';
     return;
   }
   if (view === id) return;
   if (view === 'radio') cancelSignal();
   const previous = view;
+  const fromKeyboard = document.activeElement?.matches(':focus-visible');
   view = id;
   document.body.dataset.view = view;
-  $('detail').hidden = view === 'room';
+  $('back').hidden = view === 'room';
+  $('objects').hidden = view !== 'room';
   $('pager').hidden = terminal.hidden = true;
   $('reading').textContent = '';
-  for (const item of byObject) {
-    if (item.dataset.object === view) item.setAttribute('aria-current','true');
-    else item.removeAttribute('aria-current');
-  }
-  if (objects[view]) {
-    const [number, name, note] = objects[view];
-    $('detail-number').textContent = number;
-    $('detail-name').textContent = name;
-    $('detail-note').textContent = note;
-    $('back').focus({ preventScroll:true });
-  } else {
-    document.querySelector(`.dock [data-object="${previous}"]`)?.focus({ preventScroll:true });
+  if (fromKeyboard) {
+    const nextFocus = view === 'room' ? byObject.find(item => item.dataset.object === previous) : $('back');
+    nextFocus?.focus({ preventScroll:true });
   }
   if (view === 'diary') $('reading').textContent = diary.map(p => [p.title, ...p.lines].join('。')).join('。');
-  announce('');
   flightTo(id);
-}
-
-function announce(text) {
-  clearTimeout(noticeTimer);
-  $('notice').textContent = text;
-  if (text) noticeTimer = setTimeout(() => { $('notice').textContent = ''; }, 2100);
 }
 
 function updatePager() {
@@ -184,10 +183,13 @@ function animatePaper(now) {
   updatePager();
 }
 
-function pick(event) {
-  if (!room || moving) return null;
+function trackPointer(event) {
   const rect = canvas.getBoundingClientRect();
   pointer.set((event.clientX - rect.left) / rect.width * 2 - 1, 1 - (event.clientY - rect.top) / rect.height * 2);
+}
+
+function pick() {
+  if (!room || moving) return null;
   ray.setFromCamera(pointer, room.camera);
   const hit = ray.intersectObjects(room.scene.children, true).find(({ object }) => object.visible);
   for (let node = hit?.object; node; node = node.parent) {
@@ -196,13 +198,17 @@ function pick(event) {
   return null;
 }
 
-function placePins() {
-  for (const pin of pins) {
-    marker.copy(room.anchors[pin.dataset.object]).project(room.camera);
-    pin.style.left = `${50 + 50 * marker.x}%`;
-    pin.style.top = `${50 - 50 * marker.y}%`;
-    pin.classList.toggle('is-hover', hover === pin.dataset.object);
-  }
+function moveOverview(delta) {
+  const follow = mouseInside && !reduced.matches;
+  overviewProgress = reduced.matches ? scrollTarget : T.MathUtils.damp(overviewProgress, scrollTarget, 7, delta);
+  sway.x = T.MathUtils.damp(sway.x, follow ? pointer.x : 0, 6, delta);
+  sway.y = T.MathUtils.damp(sway.y, follow ? pointer.y : 0, 6, delta);
+  const pose = overviewPose();
+  const swayScale = T.MathUtils.lerp(1, .4, overviewProgress);
+  room.camera.position.copy(pose.eye);
+  room.camera.position.x += sway.x * .39 * swayScale;
+  room.camera.position.y += sway.y * .24 * swayScale;
+  room.camera.lookAt(pose.target);
 }
 
 function resize() {
@@ -210,9 +216,11 @@ function resize() {
   const width = canvas.clientWidth;
   const height = canvas.clientHeight;
   if (!width || !height) return;
-  room.renderer.setSize(width, height, false);
+  room.setSize(width, height);
   room.camera.aspect = width / height;
-  const pose = cameraPose(view);
+  overview = cameraPose('room');
+  seated = cameraPose('seated');
+  const pose = view === 'room' ? overviewPose() : cameraPose(view);
   room.camera.position.copy(pose.eye);
   room.camera.quaternion.copy(orientation(pose));
   projection(pose.shift);
@@ -220,6 +228,8 @@ function resize() {
 }
 
 function frame(now) {
+  const delta = Math.min(.05, (now - (frameTime ?? now)) / 1000);
+  frameTime = now;
   if (flight) {
     const progress = flight.duration ? clamp((now - flight.from) / flight.duration) : 1;
     const t = ease(progress);
@@ -227,7 +237,13 @@ function frame(now) {
     room.camera.quaternion.copy(flight.startRotation).slerp(flight.endRotation, t);
     projection(T.MathUtils.lerp(flight.startShift, flight.shift, t));
     if (progress === 1) settle();
+  } else if (view === 'room') {
+    moveOverview(delta);
   }
+  room.camera.updateMatrixWorld();
+  const underPointer = mouseInside && (view === 'room' || view === 'paper') ? pick() : null;
+  hover = view === 'room' ? underPointer : null;
+  canvas.style.cursor = hover || (view === 'paper' && underPointer === 'paper') ? 'pointer' : '';
   const blend = reduced.matches ? 1 : .08;
   focusAmount = T.MathUtils.lerp(focusAmount, view === 'map' ? 1 : 0, blend);
   const diaryOpen = view === 'diary' && (!flight || now > flight.from + flight.duration * .73);
@@ -244,8 +260,9 @@ function frame(now) {
   room.radio.lever.rotation.z = signalPhase === 'tx' ? -.095 * (1 + Math.sin(now / 39)) : 0;
   room.radio.led.material.emissiveIntensity = signalPhase ? 1.3 + .95 * Math.sin(now / 100) : .24;
   animatePaper(now);
-  room.renderer.render(room.scene, room.camera);
-  if (view === 'room') placePins();
+  const focused = view === 'room' && !moving && document.activeElement?.matches('[data-object]:focus-visible')
+    ? document.activeElement.dataset.object : null;
+  room.render(hover || focused);
 }
 
 function addMessage(style, text) {
@@ -319,12 +336,20 @@ $('back').addEventListener('click', () => select('room'));
 $('prev').addEventListener('click', () => flip(-1));
 $('next').addEventListener('click', () => flip(1));
 canvas.addEventListener('pointermove', event => {
-  hover = view === 'room' ? pick(event) : null;
-  canvas.style.cursor = hover || (view === 'paper' && pick(event) === 'paper') ? 'pointer' : '';
+  if (event.pointerType === 'touch') return;
+  mouseInside = true;
+  trackPointer(event);
 });
-canvas.addEventListener('pointerleave', () => { hover = null; });
+canvas.addEventListener('pointerleave', () => { mouseInside = false; });
+canvas.addEventListener('wheel', event => {
+  if (!room || view !== 'room' || event.ctrlKey) return;
+  event.preventDefault();
+  const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? canvas.clientHeight : 1;
+  scrollTarget = clamp(scrollTarget + event.deltaY * unit / 640);
+}, { passive:false });
 canvas.addEventListener('click', event => {
-  const id = pick(event);
+  trackPointer(event);
+  const id = pick();
   if (view === 'room' && id) select(id);
   else if (view === 'paper' && id === 'paper') flip(pageIndex === papers.length - 1 ? -(papers.length - 1) : 1);
 });
@@ -337,12 +362,11 @@ window.addEventListener('keydown', event => {
 try {
   room = await createScene(canvas, papers, diary);
   resize();
+  $('objects').hidden = false;
   window.addEventListener('resize', resize);
   room.renderer.setAnimationLoop(frame);
-  announce('');
+  $('notice').textContent = '';
 } catch (error) {
   console.error(error);
-  for (const item of byObject) item.disabled = true;
-  $('hotspots').hidden = true;
   $('notice').textContent = '3D 场景加载失败，请使用支持 WebGL 2 的浏览器重新打开。';
 }

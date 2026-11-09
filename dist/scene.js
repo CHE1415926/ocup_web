@@ -1,5 +1,9 @@
 import * as T from './vendor/three.module.js';
 import { RoundedBoxGeometry } from './vendor/RoundedBoxGeometry.js';
+import { EffectComposer } from './vendor/postprocessing/EffectComposer.js';
+import { OutlinePass } from './vendor/postprocessing/OutlinePass.js';
+import { OutputPass } from './vendor/postprocessing/OutputPass.js';
+import { RenderPass } from './vendor/postprocessing/RenderPass.js';
 
 const surface = 1.91;
 const v = (x, y, z) => new T.Vector3(x, y, z);
@@ -129,6 +133,25 @@ function sheet(parent, mat, x, y, z, w, h) {
   return item;
 }
 
+function makeSpine(diary, leather, trim) {
+  const section = new T.Shape();
+  section.moveTo(-.282, .102);
+  section.bezierCurveTo(-.395, .103, -.395, .006, -.282, .005);
+  section.lineTo(-.282, .023);
+  section.bezierCurveTo(-.366, .024, -.366, .084, -.282, .084);
+  section.closePath();
+
+  const depth = .748;
+  const shell = new T.ExtrudeGeometry(section, {
+    depth, curveSegments: 16, bevelThickness: .005, bevelSize: .004, bevelSegments: 2
+  });
+  put(diary, shell, leather, 0, 0, -depth / 2);
+  const band = new T.ExtrudeGeometry(section, {
+    depth: .017, curveSegments: 12, bevelThickness: .003, bevelSize: .003, bevelSegments: 2
+  });
+  for (const z of [-.257, .24]) put(diary, band, trim, -.006, 0, z);
+}
+
 function furniture(room, mats) {
   const { wood, trim, shadowWood, felt, iron } = mats;
   box(room, wood, 0, 1.85, 0, 4.16, .12, 1.92);
@@ -192,7 +215,7 @@ function makeLamp(scene, room, mats) {
   const light = new T.PointLight('#ffad52', 0, 3.9, 2);
   light.position.copy(lamp.position).add(v(0, .37, .035));
   scene.add(light);
-  return { flame, core, light };
+  return { model:lamp, flame, core, light };
 }
 
 function makeRadio(room, mats) {
@@ -245,7 +268,7 @@ function makeRadio(room, mats) {
   const lever = box(key, gold, 0,.099,0,.30,.021,.029);
   sphere(key, iron, .157,.107,0,.046,.018,.035);
   line(radio, iron, [[.34,.043,.55],[.63,.03,.44],[.67,.026,.15],[.49,.047,-.14]], .012);
-  return { lever, led };
+  return { model:radio, lever, led };
 }
 
 export async function createScene(canvas, papers, diaryPages) {
@@ -312,7 +335,7 @@ export async function createScene(canvas, papers, diaryPages) {
   left.rotation.x = Math.PI / 2;
   left.rotation.z = Math.PI;
   sheet(diary, printPage(diaryPages[1]), .005,.087,0,.591,.707);
-  line(diary, leather, [[-.32,.026,-.36],[-.329,.044,0],[-.32,.074,.36]], .027);
+  makeSpine(diary, leather, mats.trim);
 
   const lamp = makeLamp(scene, room, mats);
   const radio = makeRadio(room, mats);
@@ -322,8 +345,81 @@ export async function createScene(canvas, papers, diaryPages) {
   poster.anisotropy = 8;
   box(map, material('#4d251c'), 0, 0, 0, 2.22, 1.494, .035);
   const posterMat = new T.MeshStandardMaterial({ map:poster, emissive:'#ffffff', emissiveMap:poster, emissiveIntensity:.14, roughness:1 });
-  put(map, new T.PlaneGeometry(2.22, 1.494), posterMat, 0, 0, .0185);
+  const mapWidth = 2.22;
+  const mapHeight = 1.494;
+  put(map, new T.PlaneGeometry(mapWidth, mapHeight), posterMat, 0, 0, .0185);
+  const mapBorder = group(map, 0, 0, .021);
+  mapBorder.visible = false;
+  const border = new T.MeshBasicMaterial({ color:'#ebbd84', toneMapped:false });
+  const weight = .012;
+  for (const side of [-1, 1]) {
+    const vertical = new T.Mesh(new T.PlaneGeometry(weight, mapHeight + 2 * weight), border);
+    vertical.position.x = side * (mapWidth + weight) / 2;
+    const horizontal = new T.Mesh(new T.PlaneGeometry(mapWidth, weight), border);
+    horizontal.position.y = side * (mapHeight + weight) / 2;
+    vertical.raycast = horizontal.raycast = () => {};
+    mapBorder.add(vertical, horizontal);
+  }
 
-  return { renderer, scene, camera, ambient, key, paperMats, page, arriving, hinge, lamp, radio, map, posterMat,
-    anchors: {paper:v(-1.35, surface+.095, .62), diary:v(-.22,surface+.17,.42), lamp:v(-1.46,surface+.43,-.42), radio:v(1.22,surface+.42,.12), map:v(1.13,3.58,-.96)} };
+  const selectable = { paper, diary, lamp:lamp.model, radio:radio.model };
+  const composer = new EffectComposer(renderer);
+  const outline = new OutlinePass(new T.Vector2(1, 1), scene, camera);
+  outline.visibleEdgeColor.set('#ffd191');
+  outline.hiddenEdgeColor.set(0x000000);
+  outline.edgeStrength = 3.5;
+  outline.edgeGlow = .95;
+  outline.edgeThickness = 1;
+  const paperOverlay = outline.overlayMaterial;
+  const lineOverlay = paperOverlay.clone();
+  lineOverlay.blending = T.NormalBlending;
+  lineOverlay.uniforms.lineColor = { value:new T.Color('#ebbd84') };
+  lineOverlay.uniforms.lineStep = { value:new T.Vector2() };
+  lineOverlay.fragmentShader = `
+    varying vec2 vUv;
+    uniform sampler2D maskTexture;
+    uniform vec3 lineColor;
+    uniform vec2 lineStep;
+
+    float shapeAt(vec2 uv) {
+      return 1.0 - texture2D(maskTexture, uv).r;
+    }
+
+    void main() {
+      float outside = texture2D(maskTexture, vUv).r;
+      float nearby = 0.0;
+      for (int y = -1; y <= 1; y++) {
+        for (int x = -1; x <= 1; x++) {
+          vec2 offset = vec2(float(x), float(y)) * lineStep;
+          nearby = max(nearby, shapeAt(vUv + offset));
+        }
+      }
+      float coverage = smoothstep(0.18, 0.8, nearby) * outside;
+      gl_FragColor = vec4(lineColor, coverage);
+    }
+  `;
+  composer.addPass(new RenderPass(scene, camera));
+  composer.addPass(outline);
+  composer.addPass(new OutputPass());
+
+  function setSize(width, height) {
+    renderer.setSize(width, height, false);
+    composer.setSize(width, height);
+    lineOverlay.uniforms.lineStep.value.set(1.45 / width, 1.45 / height);
+  }
+
+  function render(highlight) {
+    mapBorder.visible = highlight === 'map';
+    const model = selectable[highlight];
+    if (model) {
+      const isPaper = highlight === 'paper';
+      outline.overlayMaterial = isPaper ? paperOverlay : lineOverlay;
+      outline.edgeGlow = isPaper ? .95 : 0;
+      outline.selectedObjects = [model];
+      composer.render();
+    } else {
+      renderer.render(scene, camera);
+    }
+  }
+
+  return { renderer, scene, camera, setSize, render, ambient, key, paperMats, page, arriving, diary, hinge, lamp, radio, posterMat };
 }

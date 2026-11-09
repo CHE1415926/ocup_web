@@ -12,28 +12,15 @@
 <body data-view="room">
   <canvas id="scene" aria-label="长征主题的三维书桌"></canvas>
   <div class="vignette" aria-hidden="true"></div>
-  <header class="masthead">
-    <div class="identity"><span class="seal" aria-hidden="true">★</span><span>长征档案室 <small>THE LONG MARCH ARCHIVE</small></span></div>
-    <div class="folio"><span></span> 场景 01 <i>／</i> 行军案头</div>
-  </header>
   <main>
-    <section class="intro" aria-labelledby="title">
-      <p class="eyebrow"><span></span> 可交互档案 <b>01—05</b></p>
-      <h1 id="title">行军案头</h1>
-      <p>一盏灯，一张地图，<br>一方记录行军的书桌。</p>
-      <p class="hint">移动鼠标，点击物件探索 <span aria-hidden="true">↗</span></p>
-    </section>
-    <div id="hotspots" aria-label="场景物件">
-      <button class="pin" data-object="paper" aria-label="查看桌上文稿"><span>01</span><b>文稿</b></button>
-      <button class="pin" data-object="diary" aria-label="打开日记本"><span>02</span><b>日记</b></button>
-      <button class="pin" data-object="lamp" aria-label="点亮或熄灭油灯" aria-pressed="false"><span>03</span><b>油灯</b></button>
-      <button class="pin" data-object="radio" aria-label="操作电报机"><span>04</span><b>电报</b></button>
-      <button class="pin" data-object="map" aria-label="查看长征地图"><span>05</span><b>地图</b></button>
+    <div id="objects" class="sr-only" role="group" aria-label="场景物件" hidden>
+      <button data-object="paper">查看桌上文稿</button>
+      <button data-object="diary">打开日记本</button>
+      <button data-object="lamp" aria-pressed="false">点亮或熄灭油灯</button>
+      <button data-object="radio">操作电报机</button>
+      <button data-object="map">查看长征地图</button>
     </div>
-    <section id="detail" class="detail" hidden aria-label="物件详情">
-      <button id="back" class="back" type="button"><span aria-hidden="true">←</span> 返回书桌 <kbd>Esc</kbd></button>
-      <div class="detail-title"><span id="detail-number"></span><h2 id="detail-name"></h2><p id="detail-note"></p></div>
-    </section>
+    <button id="back" class="back" type="button" hidden><span aria-hidden="true">←</span> 返回书桌 <kbd>Esc</kbd></button>
     <div id="pager" class="pager" hidden aria-label="文稿翻页">
       <button id="prev" type="button" aria-label="上一页">←</button>
       <span id="page-number" aria-live="polite">01 / 03</span>
@@ -53,17 +40,6 @@
     </section>
     <p class="notice" id="notice" role="status">正在布置案头…</p>
   </main>
-  <footer class="dock" aria-label="物件索引">
-    <div class="dock-title">物件索引 <small>OBJECT INDEX</small></div>
-    <nav aria-label="选择物件">
-      <button data-object="paper"><small>01</small> 文稿</button>
-      <button data-object="diary"><small>02</small> 日记</button>
-      <button data-object="lamp" aria-pressed="false"><small>03</small> 油灯</button>
-      <button data-object="radio"><small>04</small> 电报</button>
-      <button data-object="map"><small>05</small> 地图</button>
-    </nav>
-    <div class="dock-end">1934 <i>—</i> 1936</div>
-  </footer>
   <script type="module" src="./app.js"></script>
 </body>
 </html>
