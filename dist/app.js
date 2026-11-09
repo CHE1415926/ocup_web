@@ -50,14 +50,14 @@ function cameraPose(id) {
   const mobile = canvas.clientWidth <= 760;
   const fit = (width, height) => Math.max(width / room.camera.aspect, height) / (2 * Math.tan(T.MathUtils.degToRad(room.camera.fov / 2)));
   if (id === 'room') {
-    const target = v(0, 1.88, .2);
-    const distance = fit(mobile ? 4.80 : 5.5, mobile ? 5.95 : 5.62);
-    const offset = v(2.28, 1.65, 7.68).normalize().multiplyScalar(distance);
+    const target = v(-.72, 1.96, .2);
+    const distance = fit(mobile ? 6.65 : 6.8, mobile ? 5.95 : 5.74);
+    const offset = v(mobile ? 3.69 : 2.85, mobile ? .49 : 1.22, 7.68).normalize().multiplyScalar(distance);
     return { target, eye:target.clone().add(offset), up:direction, shift:0 };
   }
   if (id === 'seated') {
-    const target = v(0, 2.12, .16);
-    return { target, eye:target.clone().add(v(0,.52,fit(4.78,4.30))), up:direction, shift:0 };
+    const target = v(mobile ? -.45 : .17, 2.12, .16);
+    return { target, eye:target.clone().add(v(0,.52,fit(mobile ? 6.3 : 5.9,4.30))), up:direction, shift:0 };
   }
   if (id === 'paper') {
     const target = v(-1.27, 1.95, .43);
@@ -191,7 +191,7 @@ function trackPointer(event) {
 function pick() {
   if (!room || moving) return null;
   ray.setFromCamera(pointer, room.camera);
-  const hit = ray.intersectObjects(room.scene.children, true).find(({ object }) => object.visible);
+  const hit = ray.intersectObjects(room.pickRoots, true).find(({ object }) => object.visible);
   for (let node = hit?.object; node; node = node.parent) {
     if (node.userData.object) return node.userData.object;
   }
@@ -249,8 +249,7 @@ function frame(now) {
   const diaryOpen = view === 'diary' && (!flight || now > flight.from + flight.duration * .73);
   coverAmount = T.MathUtils.lerp(coverAmount, diaryOpen ? 1 : 0, blend);
   lightAmount = T.MathUtils.lerp(lightAmount, lampOn ? 1 : 0, blend);
-  room.ambient.intensity = 1.56 - 1.38 * focusAmount;
-  room.key.intensity = 2.35 - 2.26 * focusAmount;
+  room.updateEnvironment(now, focusAmount, reduced.matches);
   room.posterMat.emissiveIntensity = .14 + .93 * focusAmount;
   room.hinge.rotation.z = Math.PI * coverAmount;
   room.lamp.flame.visible = room.lamp.core.visible = lightAmount > .045;
